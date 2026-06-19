@@ -101,6 +101,7 @@ spec:
         - "--session-id-jwt-pool=/run/session-id-jwt-pool/pool.json"
         - "--session-id-ca-pool=/run/session-id-ca-pool/pool.json"
         - "--workerpool-ca-certs=/run/workerpool-ca-certs/trust-bundle.pem"
+        - "--egress-tunnel-gateway-address=@env"
         env:
         - name: POD_NAME
           valueFrom:

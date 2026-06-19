@@ -40,6 +40,9 @@ type ProcessResponse struct {
 }
 
 func main() {
+	if err := configureExtraCAPEM(); err != nil {
+		log.Fatalf("Failed to configure extra CA PEM: %v", err)
+	}
 
 	pattern := "/process"
 	http.HandleFunc("POST "+pattern, handleProcess)
@@ -51,6 +54,23 @@ func main() {
 
 	log.Printf("Stateless Sandbox serving at port %s, path: %s", port, pattern)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+
+func configureExtraCAPEM() error {
+	pem := os.Getenv("SUBSTRATE_EGRESS_CA_PEM")
+	if pem == "" {
+		return nil
+	}
+	const path = "/tmp/substrate-egress-ca.pem"
+	if err := os.WriteFile(path, []byte(pem), 0o644); err != nil {
+		return err
+	}
+	if os.Getenv("SSL_CERT_FILE") == "" {
+		if err := os.Setenv("SSL_CERT_FILE", path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func handleProcess(w http.ResponseWriter, r *http.Request) {

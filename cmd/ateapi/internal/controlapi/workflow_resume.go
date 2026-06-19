@@ -162,6 +162,7 @@ type CallAteletRestoreStep struct {
 	dialer      *AteletDialer
 	kubeClient  kubernetes.Interface
 	secretCache *envSecretCache
+	egress      EgressTunnelConfig
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -210,6 +211,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Runsc:                  runscCfg,
 			Spec:                   workloadSpec,
 			SnapshotUriPrefix:      state.Actor.GetLastSnapshot(),
+			EgressTunnel:           buildAteletEgressTunnelConfig(s.egress, state.ActorTemplate.Namespace, state.ActorTemplate.Name),
 		}
 		_, err = client.Restore(ctx, req)
 		if err != nil {
@@ -229,6 +231,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Runsc:                  runscCfg,
 			Spec:                   workloadSpec,
 			SnapshotUriPrefix:      snapshot,
+			EgressTunnel:           buildAteletEgressTunnelConfig(s.egress, state.ActorTemplate.Namespace, state.ActorTemplate.Name),
 		}
 		_, err = client.Restore(ctx, req)
 		if err != nil {
@@ -244,15 +247,31 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorId:                state.Actor.GetActorId(),
 			Runsc:                  runscCfg,
 			Spec:                   workloadSpec,
+			EgressTunnel:           buildAteletEgressTunnelConfig(s.egress, state.ActorTemplate.Namespace, state.ActorTemplate.Name),
 		}
 		_, err = client.Run(ctx, req)
 		if err != nil {
 			return fmt.Errorf("while creating workload from spec: %w", err)
 		}
-
 		return nil
 	}
 	// Unreachable
+}
+
+func buildAteletEgressTunnelConfig(cfg EgressTunnelConfig, namespace, name string) *ateletpb.EgressTunnelConfig {
+	if cfg.GatewayAddress == "" {
+		return nil
+	}
+	if len(cfg.TargetActorTemplates) > 0 {
+		if _, ok := cfg.TargetActorTemplates[namespace+"/"+name]; !ok {
+			return nil
+		}
+	}
+	return &ateletpb.EgressTunnelConfig{
+		Transparent:       true,
+		GatewayAddress:    cfg.GatewayAddress,
+		LocalRedirectPort: cfg.LocalRedirectPort,
+	}
 }
 
 func (s *CallAteletRestoreStep) RetryBackoff() *wait.Backoff { return nil }

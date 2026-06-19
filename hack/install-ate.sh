@@ -39,6 +39,9 @@ fi
 ATE_DEMOS=()
 
 ATE_INSTALL_ATENET_ROUTER="${ATE_INSTALL_ATENET_ROUTER:-agentgateway}"
+ATE_INSTALL_ENABLE_EGRESS="${ATE_INSTALL_ENABLE_EGRESS:-false}"
+ATE_INSTALL_EGRESS_GATEWAY_ADDRESS="${ATE_INSTALL_EGRESS_GATEWAY_ADDRESS:-atenet-egress.ate-system.svc:15080}"
+ATE_INSTALL_EGRESS_TARGET_ACTOR_TEMPLATES="${ATE_INSTALL_EGRESS_TARGET_ACTOR_TEMPLATES:-ate-demo-sandbox/sandbox-template}"
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
@@ -64,6 +67,7 @@ function usage() {
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
   echo "  --router=agentgateway                  Select atenet-router implementation (default: agentgateway)"
+  echo "  --enable-egress                        Deploy prototype egress control plane and enable actor egress tunneling"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo ""
@@ -72,6 +76,8 @@ function usage() {
   echo "  --deploy-atelet                        Deploy atelet only"
   echo "  --deploy-ate-apiserver                 Deploy ate-api-server only"
   echo "  --deploy-atenet                        Deploy atenet only"
+  echo "  --deploy-prototype-controlplane        Deploy prototype egress control plane only"
+  echo "  --delete-prototype-controlplane        Delete prototype egress control plane only"
   echo ""
   echo "To create individual resources used by ate-system (Note: These are"
   echo "called automatically by --deploy-ate-system):"
@@ -115,6 +121,19 @@ run_ko() {
       ;;
     *)
       ./hack/run-tool.sh ko "$@"
+      ;;
+  esac
+}
+
+run_prototype_ko() {
+  # The prototype control plane is a nested module so ko must run from that
+  # module directory instead of the repository root, which uses vendor mode.
+  case "${1:-}" in
+    apply|create|delete|run)
+      (cd prototype-controlplane && ../hack/run-tool.sh ko "$@" ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"})
+      ;;
+    *)
+      (cd prototype-controlplane && ../hack/run-tool.sh ko "$@")
       ;;
   esac
 }
@@ -241,12 +260,19 @@ create_api_server_env_vars() {
     fi
   fi
 
+  local egress_gateway_address=""
+  if [[ "${ATE_INSTALL_ENABLE_EGRESS}" == "true" ]]; then
+    egress_gateway_address="${ATE_INSTALL_EGRESS_GATEWAY_ADDRESS}"
+  fi
+
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
     --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
     --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
     --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
     --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
+    --from-literal=ATE_API_EGRESS_TUNNEL_GATEWAY_ADDRESS="${egress_gateway_address}" \
+    --from-literal=ATE_API_EGRESS_TUNNEL_ACTOR_TEMPLATES="${ATE_INSTALL_EGRESS_TARGET_ACTOR_TEMPLATES}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }
@@ -298,11 +324,20 @@ deploy_ate_system() {
     manifests=$(kubectl kustomize "$(ate_install_kustomize_base_dir)" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
   fi
   echo "${manifests}" | run_kubectl apply -f -
+  if [[ "${ATE_INSTALL_ENABLE_EGRESS}" == "true" ]]; then
+    create_api_server_env_vars
+    deploy_prototype_controlplane
+    run_kubectl rollout restart deployment/ate-api-server-deployment -n ate-system
+  fi
 
   log_step "Waiting for ATE system components to be ready..."
   run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
+  if [[ "${ATE_INSTALL_ENABLE_EGRESS}" == "true" ]]; then
+    run_kubectl rollout status deployment/prototype-controlplane -n ate-system --timeout=120s
+    run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
+  fi
   run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
@@ -318,8 +353,7 @@ ensure_apiserver_prerequisites() {
     || create_podcertificate_controller_cas
   run_kubectl get secret -n ate-system valkey-ca-certs >/dev/null 2>&1 \
     || create_valkey_ca_certs_secret
-  run_kubectl get configmap -n ate-system ate-api-server-envvars >/dev/null 2>&1 \
-    || create_api_server_env_vars
+  create_api_server_env_vars
 }
 
 # Redeploy only the ate-apiserver
@@ -333,6 +367,9 @@ deploy_ate_apiserver() {
 
   ensure_apiserver_prerequisites
 
+  if [[ "${ATE_INSTALL_ENABLE_EGRESS}" == "true" ]]; then
+    deploy_prototype_controlplane
+  fi
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
   run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
 }
@@ -371,8 +408,19 @@ deploy_atenet() {
   run_kubectl rollout status deployment/atenet-dns -n ate-system --timeout=120s
 }
 
+deploy_prototype_controlplane() {
+  log_step "deploy_prototype_controlplane"
+  run_kubectl apply -f manifests/ate-install/namespace.yaml \
+    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  run_prototype_ko apply -f ../manifests/ate-install/prototype-controlplane.yaml
+  run_kubectl rollout status deployment/prototype-controlplane -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
+}
+
 delete_ate_system() {
   log_step "delete_ate_system"
+  delete_prototype_controlplane
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone \
       | run_kubectl delete --ignore-not-found -f -
@@ -385,6 +433,11 @@ delete_ate_system() {
 delete_atenet() {
   log_step "delete_atenet"
   run_kubectl delete --ignore-not-found -f "$(atenet_router_manifest)"
+}
+
+delete_prototype_controlplane() {
+  log_step "delete_prototype_controlplane"
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/prototype-controlplane.yaml
 }
 
 delete_all() {
@@ -412,6 +465,9 @@ for arg in "$@"; do
     --router=*)
       set_atenet_router "${arg#--router=}"
       ;;
+    --enable-egress)
+      ATE_INSTALL_ENABLE_EGRESS="true"
+      ;;
   esac
 done
 
@@ -430,6 +486,7 @@ while [[ "$#" -gt 0 ]]; do
 
   case $1 in
     --deploy-ate-system) deploy_ate_system ;;
+    --enable-egress) ;;
     --router=*) ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
@@ -438,7 +495,9 @@ while [[ "$#" -gt 0 ]]; do
     --deploy-ate-apiserver) deploy_ate_apiserver ;;
 
     --deploy-atenet) deploy_atenet ;;
+    --deploy-prototype-controlplane) deploy_prototype_controlplane ;;
     --delete-atenet) delete_atenet ;;
+    --delete-prototype-controlplane) delete_prototype_controlplane ;;
 
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
     --create-session-id-ca-pool-secret) create_session_id_ca_pool_secret ;;

@@ -1,0 +1,236 @@
+#  Copyright 2026 Google LLC
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+# DO NOT EDIT — generated from charts/substrate by hack/render-manifests.sh.
+# Run `make helm-template` to regenerate.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prototype-controlplane
+  namespace: ate-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prototype-controlplane-policy
+  namespace: ate-system
+data:
+  policy.json: |
+    {
+      "policies": [
+        {
+          "name": "sandbox-egress",
+          "namespace": "ate-demo-sandbox",
+          "spec": {
+            "allow": [
+              {
+                "inject": {
+                  "headers": [
+                    {
+                      "name": "Authorization",
+                      "valueFrom": "openai-api-key"
+                    }
+                  ]
+                },
+                "name": "openai-api",
+                "to": [
+                  {
+                    "host": "api.openai.com",
+                    "ports": [
+                      {
+                        "port": 443,
+                        "protocol": "TCP"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "defaultAction": "Deny",
+            "gatewayClassName": "agentgateway",
+            "targetRef": {
+              "kind": "ActorTemplate",
+              "name": "sandbox-template"
+            },
+            "tlsBump": {
+              "dynamicCA": {
+                "ref": "substrate-egress-ca"
+              },
+              "enabled": true
+            },
+            "transparent": true
+          }
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prototype-controlplane
+  namespace: ate-system
+spec:
+  selector:
+    app: prototype-controlplane
+  ports:
+  - name: xds
+    port: 15010
+    targetPort: xds
+  - name: http
+    port: 8080
+    targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+spec:
+  selector:
+    app: atenet-egress
+  ports:
+  - name: tcp-egress
+    port: 15080
+    targetPort: tcp-egress
+  - name: readiness
+    port: 15021
+    targetPort: readiness
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prototype-controlplane
+  namespace: ate-system
+  labels:
+    app: prototype-controlplane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prototype-controlplane
+  template:
+    metadata:
+      labels:
+        app: prototype-controlplane
+    spec:
+      serviceAccountName: prototype-controlplane
+      containers:
+      - name: prototype-controlplane
+        image: ko://github.com/agent-substrate/substrate/prototype-controlplane/cmd/prototype-controlplane
+        env:
+        - name: PROTOTYPE_CONTROLPLANE_XDS_ADDR
+          value: ":15010"
+        - name: PROTOTYPE_CONTROLPLANE_METRICS_ADDR
+          value: ":8080"
+        - name: PROTOTYPE_CONTROLPLANE_POLICY_FILE
+          value: /etc/prototype-controlplane/policy.json
+        - name: PROTOTYPE_CONTROLPLANE_CREDENTIALS_DIR
+          value: /etc/prototype-controlplane/credentials
+        - name: PROTOTYPE_CONTROLPLANE_GATEWAY_NAMESPACE
+          value: "ate-system"
+        - name: PROTOTYPE_CONTROLPLANE_GATEWAY_NAME
+          value: "atenet-egress"
+        - name: PROTOTYPE_CONTROLPLANE_TLS_CERT_FILE
+          value: /etc/prototype-controlplane/tls/tls.crt
+        - name: PROTOTYPE_CONTROLPLANE_TLS_KEY_FILE
+          value: /etc/prototype-controlplane/tls/tls.key
+        ports:
+        - name: xds
+          containerPort: 15010
+        - name: http
+          containerPort: 8080
+        volumeMounts:
+        - name: policy
+          mountPath: /etc/prototype-controlplane
+          readOnly: true
+        - name: credentials
+          mountPath: /etc/prototype-controlplane/credentials
+          readOnly: true
+        - name: tls
+          mountPath: /etc/prototype-controlplane/tls
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 2
+      volumes:
+      - name: policy
+        configMap:
+          name: prototype-controlplane-policy
+      - name: credentials
+        projected:
+          sources:
+          - secret:
+              name: openai-api-key
+              optional: true
+              items:
+              - key: authorization
+                path: openai-api-key/authorization
+      - name: tls
+        secret:
+          secretName: substrate-egress-demo-tls
+          optional: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+  labels:
+    app: atenet-egress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atenet-egress
+  template:
+    metadata:
+      labels:
+        app: atenet-egress
+    spec:
+      serviceAccountName: atenet-egress
+      containers:
+      - name: agentgateway
+        image: cr.agentgateway.dev/agentgateway:v1.3.0-alpha.1
+        args:
+        - -c
+        - '{"config":{"adminAddr":"127.0.0.1:15000","readinessAddr":"0.0.0.0:15021","statsAddr":"0.0.0.0:15020"}}'
+        env:
+        - name: XDS_ADDRESS
+          value: "http://prototype-controlplane.ate-system.svc:15010"
+        - name: NAMESPACE
+          value: "ate-system"
+        - name: GATEWAY
+          value: "atenet-egress"
+        ports:
+        - name: tcp-egress
+          containerPort: 15080
+        - name: readiness
+          containerPort: 15021
+        - name: metrics
+          containerPort: 15020
+        readinessProbe:
+          httpGet:
+            path: /healthz/ready
+            port: 15021
+          periodSeconds: 10

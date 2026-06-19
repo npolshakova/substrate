@@ -47,12 +47,13 @@ helm template substrate "${CHART_DIR}" \
   --set createNamespace=true \
   --set image.registry=ko://github.com/agent-substrate/substrate/cmd \
   --set image.tag="<none>" \
+  --set prototypeControlplane.enabled=true \
   > "${TMP_DIR}/all.yaml"
 
 # Split into per-source files so the directory structure mirrors the chart
 # templates, making diffs friendlier.
 python3 - "${TMP_DIR}/all.yaml" "${TMP_DIR}/out" <<'PY'
-import os, re, sys, yaml
+import os, re, sys
 in_path, out_dir = sys.argv[1], sys.argv[2]
 os.makedirs(out_dir, exist_ok=True)
 

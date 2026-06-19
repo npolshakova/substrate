@@ -25,3 +25,5 @@ data:
   ATE_API_REDIS_TLS_SERVER_NAME: {{ .Values.redis.tlsServerName | quote }}
   ATE_API_REDIS_CLIENT_CERT: {{ .Values.redis.clientCert | default "" | quote }}
   ATE_API_K8SJWT_ISSUER: {{ .Values.auth.jwt.issuer | quote }}
+  ATE_API_EGRESS_TUNNEL_GATEWAY_ADDRESS: {{ ternary (.Values.egress.gatewayAddress | default (printf "%s.%s.svc:15080" .Values.prototypeControlplane.gatewayName .Release.Namespace)) "" .Values.egress.enabled | quote }}
+  ATE_API_EGRESS_TUNNEL_ACTOR_TEMPLATES: {{ ternary (join "," .Values.egress.targetActorTemplates) "" .Values.egress.enabled | quote }}

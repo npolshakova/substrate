@@ -29,6 +29,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 		return nil, err
 	}
 
+	s.actorWorkflow.egress = s.EgressTunnel
 	actor, err := s.actorWorkflow.ResumeActor(ctx, req.GetActorId(), req.GetBoot())
 	if err != nil {
 		if errors.Is(err, store.ErrPersistenceRetry) {

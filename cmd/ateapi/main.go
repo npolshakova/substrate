@@ -68,6 +68,10 @@ var (
 	sessionIDCAPoolFile = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
 	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
 
+	egressTunnelGatewayAddress    = pflag.String("egress-tunnel-gateway-address", "", "If set, enable transparent actor TCP egress capture and tunnel captured connections to this policy enforcement point address.")
+	egressTunnelLocalRedirectPort = pflag.Uint16("egress-tunnel-local-redirect-port", 15001, "Localhost port in the worker pod network namespace that receives redirected actor TCP egress.")
+	egressTunnelActorTemplates    = pflag.StringSlice("egress-tunnel-actor-template", nil, "ActorTemplate ref eligible for egress tunneling, formatted namespace/name. May be repeated. Empty means all actors when gateway address is set.")
+
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
 	authMode        = pflag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
@@ -143,6 +147,11 @@ func main() {
 
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
 	sm := controlapi.NewService(redisPersistence, actorTemplateLister, dialer, clientset)
+	sm.EgressTunnel = controlapi.EgressTunnelConfig{
+		GatewayAddress:       *egressTunnelGatewayAddress,
+		LocalRedirectPort:    uint32(*egressTunnelLocalRedirectPort),
+		TargetActorTemplates: targetActorTemplates(*egressTunnelActorTemplates),
+	}
 
 	jwtHTTPClient := buildJWTHTTPClient(ctx, *clientJWTCAFile)
 
@@ -200,10 +209,16 @@ func loadFlagsFromEnv() {
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
+		{egressTunnelGatewayAddress, "ATE_API_EGRESS_TUNNEL_GATEWAY_ADDRESS"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
 			*o.flag = os.Getenv(o.env)
+		}
+	}
+	if len(*egressTunnelActorTemplates) == 0 {
+		if refs := strings.TrimSpace(os.Getenv("ATE_API_EGRESS_TUNNEL_ACTOR_TEMPLATES")); refs != "" {
+			*egressTunnelActorTemplates = strings.Split(refs, ",")
 		}
 	}
 }
@@ -223,8 +238,26 @@ func logFlagValues(ctx context.Context) {
 		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("workerpool-ca-certs", *workerpoolCACerts),
+		slog.String("egress-tunnel-gateway-address", *egressTunnelGatewayAddress),
+		slog.Uint64("egress-tunnel-local-redirect-port", uint64(*egressTunnelLocalRedirectPort)),
+		slog.Any("egress-tunnel-actor-templates", *egressTunnelActorTemplates),
 		slog.String("auth-mode", *authMode),
 	)
+}
+
+func targetActorTemplates(refs []string) map[string]struct{} {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		out[ref] = struct{}{}
+	}
+	return out
 }
 
 // connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if

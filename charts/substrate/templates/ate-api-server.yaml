@@ -98,6 +98,12 @@ spec:
         - "--session-id-jwt-pool=/run/session-id-jwt-pool/pool.json"
         - "--session-id-ca-pool=/run/session-id-ca-pool/pool.json"
         - "--workerpool-ca-certs=/run/workerpool-ca-certs/trust-bundle.pem"
+        - "--egress-tunnel-gateway-address=@env"
+{{- if .Values.egress.enabled }}
+{{- range .Values.egress.targetActorTemplates }}
+        - "--egress-tunnel-actor-template={{ . }}"
+{{- end }}
+{{- end }}
 {{- else }}
         - "--grpc-server-cred-bundle=/run/ateapi-tls/credential-bundle.pem"
         - "--auth-mode=jwt"
@@ -109,6 +115,12 @@ spec:
         - "--session-id-jwt-pool=/run/session-id-jwt-pool/pool.json"
         - "--session-id-ca-pool=/run/session-id-ca-pool/pool.json"
         - "--client-jwt-ca-cert=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+        - "--egress-tunnel-gateway-address=@env"
+{{- if .Values.egress.enabled }}
+{{- range .Values.egress.targetActorTemplates }}
+        - "--egress-tunnel-actor-template={{ . }}"
+{{- end }}
+{{- end }}
 {{- end }}
         env:
         - name: POD_NAME

@@ -47,10 +47,14 @@ spec:
   - name: sandbox
     image: ko://github.com/agent-substrate/substrate/demos/sandbox
     command: ["/ko-app/sandbox"]
-    ports:
-    - containerPort: 80
     env:
     - name: PORT
       value: "80"
+    - name: SUBSTRATE_EGRESS_CA_PEM
+      valueFrom:
+        secretKeyRef:
+          name: substrate-egress-demo-ca
+          key: ca.crt
+          optional: true
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-demo-counter/

@@ -33,10 +33,30 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:5001}"
 KO_DEFAULTPLATFORMS="${KO_DEFAULTPLATFORMS:-linux/$(go env GOARCH)}"
+ATE_INSTALL_ENABLE_EGRESS="${ATE_INSTALL_ENABLE_EGRESS:-false}"
+ATE_INSTALL_EGRESS_GATEWAY_ADDRESS="${ATE_INSTALL_EGRESS_GATEWAY_ADDRESS:-atenet-egress.${NS}.svc:15080}"
+ATE_INSTALL_EGRESS_TARGET_ACTOR_TEMPLATES="${ATE_INSTALL_EGRESS_TARGET_ACTOR_TEMPLATES:-ate-demo-sandbox/sandbox-template}"
 reg_name="kind-registry"
 reg_port="5001"
 
 export KO_DOCKER_REPO KO_DEFAULTPLATFORMS
+
+for arg in "$@"; do
+  case "${arg}" in
+    --enable-egress)
+      ATE_INSTALL_ENABLE_EGRESS="true"
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--enable-egress]"
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown option: ${arg}" >&2
+      echo "Usage: $0 [--enable-egress]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 run_kubectl() {
   kubectl ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}} "$@"
@@ -44,6 +64,10 @@ run_kubectl() {
 
 run_helm() {
   helm ${KUBECTL_CONTEXT:+--kube-context=${KUBECTL_CONTEXT}} "$@"
+}
+
+run_prototype_ko() {
+  (cd "${ROOT}/prototype-controlplane" && bash "${ROOT}/hack/run-tool.sh" ko "$@")
 }
 
 log_step() {
@@ -104,14 +128,30 @@ EOF
 apply_chart() {
   log_step "apply_chart (helm template | ko resolve | kubectl apply)"
   local rendered
+  local egress_values=()
+  if [[ "${ATE_INSTALL_ENABLE_EGRESS}" == "true" ]]; then
+    egress_values=(
+      --set egress.enabled=true
+      --set egress.gatewayAddress="${ATE_INSTALL_EGRESS_GATEWAY_ADDRESS}"
+      --set "egress.targetActorTemplates[0]=${ATE_INSTALL_EGRESS_TARGET_ACTOR_TEMPLATES}"
+    )
+  fi
   rendered=$(helm template substrate "${ROOT}/charts/substrate" \
     --namespace "${NS}" \
     -f "${ROOT}/hack/values-kind-jwt.yaml" \
     --set image.registry=ko://github.com/agent-substrate/substrate/cmd \
-    --set 'image.tag=<none>')
+    --set 'image.tag=<none>' \
+    "${egress_values[@]}")
 
   # ko resolve replaces ko:// refs with built+pushed image refs.
   echo "${rendered}" | bash "${ROOT}/hack/run-tool.sh" ko resolve -f - \
+    | run_kubectl apply -f -
+}
+
+apply_prototype_controlplane() {
+  log_step "apply_prototype_controlplane"
+  sed "s/namespace: ate-system/namespace: ${NS}/g" "${ROOT}/manifests/ate-install/prototype-controlplane.yaml" \
+    | run_prototype_ko resolve -f - \
     | run_kubectl apply -f -
 }
 
@@ -130,6 +170,10 @@ wait_rollouts() {
   run_kubectl -n "${NS}" rollout status deployment/ate-api-server-deployment --timeout=180s
   run_kubectl -n "${NS}" rollout status deployment/ate-controller --timeout=180s
   run_kubectl -n "${NS}" rollout status deployment/atenet-router --timeout=180s
+  if [[ "${ATE_INSTALL_ENABLE_EGRESS}" == "true" ]]; then
+    run_kubectl -n "${NS}" rollout status deployment/prototype-controlplane --timeout=180s
+    run_kubectl -n "${NS}" rollout status deployment/atenet-egress --timeout=180s
+  fi
   run_kubectl -n "${NS}" rollout status daemonset/atelet --timeout=180s
   run_kubectl -n "${NS}" rollout status statefulset/valkey-cluster --timeout=180s
 }
@@ -138,6 +182,9 @@ ensure_namespace
 ensure_kind_local_registry
 apply_crds
 apply_chart
+if [[ "${ATE_INSTALL_ENABLE_EGRESS}" == "true" ]]; then
+  apply_prototype_controlplane
+fi
 apply_kind_extras
 wait_rollouts
 

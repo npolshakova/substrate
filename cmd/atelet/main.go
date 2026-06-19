@@ -319,6 +319,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		ActorId:                req.GetActorId(),
 		RunscPath:              runscPath,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		EgressTunnel:           buildAteomEgressTunnelConfig(req.GetEgressTunnel()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
@@ -488,6 +489,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		ActorId:                actorID,
 		RunscPath:              runscPath,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		EgressTunnel:           buildAteomEgressTunnelConfig(req.GetEgressTunnel()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
@@ -594,6 +596,17 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 	return out
 }
 
+func buildAteomEgressTunnelConfig(cfg *ateletpb.EgressTunnelConfig) *ateompb.EgressTunnelConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &ateompb.EgressTunnelConfig{
+		Transparent:       cfg.GetTransparent(),
+		GatewayAddress:    cfg.GetGatewayAddress(),
+		LocalRedirectPort: cfg.GetLocalRedirectPort(),
+	}
+}
+
 // uploadIfExists uploads a local file to GCS (zstd-compressed) only if
 // the file is present. Missing files are silently skipped — used for
 // optional checkpoint side-files (pages.img, pages_meta.img).
@@ -642,7 +655,10 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 // boundary, before any path is built. The field rules live in
 // internal/resources so other components can apply them at their boundaries.
 func validateRunRequest(req *ateletpb.RunRequest) error {
-	return validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec())
+	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+		return err
+	}
+	return validateEgressTunnelConfig(req.GetEgressTunnel())
 }
 
 func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
@@ -661,6 +677,19 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	}
 	if err := resources.ValidateSnapshotURIPrefix(req.GetSnapshotUriPrefix()); err != nil {
 		return err
+	}
+	return validateEgressTunnelConfig(req.GetEgressTunnel())
+}
+
+func validateEgressTunnelConfig(cfg *ateletpb.EgressTunnelConfig) error {
+	if cfg == nil || !cfg.GetTransparent() {
+		return nil
+	}
+	if cfg.GetGatewayAddress() == "" {
+		return fmt.Errorf("egress tunnel gateway address is required when transparent egress is enabled")
+	}
+	if cfg.GetLocalRedirectPort() == 0 || cfg.GetLocalRedirectPort() > 65535 {
+		return fmt.Errorf("egress tunnel local redirect port must be in range 1-65535")
 	}
 	return nil
 }

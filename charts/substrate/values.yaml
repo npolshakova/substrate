@@ -94,6 +94,43 @@ atelet:
   extraArgs: []
   extraEnv: []
 
+egress:
+  enabled: false
+  gatewayAddress: ""
+  targetActorTemplates: []
+
+prototypeControlplane:
+  enabled: false
+  gatewayName: atenet-egress
+  gatewayNamespace: ate-system
+  image: ko://github.com/agent-substrate/substrate/prototype-controlplane/cmd/prototype-controlplane
+  policy:
+    policies:
+    - namespace: ate-demo-sandbox
+      name: sandbox-egress
+      spec:
+        targetRef:
+          kind: ActorTemplate
+          name: sandbox-template
+        gatewayClassName: agentgateway
+        transparent: true
+        defaultAction: Deny
+        tlsBump:
+          enabled: true
+          dynamicCA:
+            ref: substrate-egress-ca
+        allow:
+        - name: openai-api
+          to:
+          - host: api.openai.com
+            ports:
+            - port: 443
+              protocol: TCP
+          inject:
+            headers:
+            - name: Authorization
+              valueFrom: openai-api-key
+
 redis:
   # Override the cluster address. Empty -> derived from valkey.enabled
   # (defaults to "valkey-cluster.ate-system.svc:6379").

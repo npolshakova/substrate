@@ -77,7 +77,17 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: ATE_STORAGE_BACKEND
-          value: "gcs"
+          value: "s3"
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ENDPOINT_URL
+          value: http://rustfs.ate-system.svc:9000
+        - name: AWS_S3_USE_PATH_STYLE
+          value: "true"
+        - name: AWS_ACCESS_KEY_ID
+          value: "rustfsadmin"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "rustfsadmin"
         ports:
         - name: grpc
           containerPort: 8085

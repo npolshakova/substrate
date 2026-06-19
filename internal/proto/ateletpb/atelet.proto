@@ -42,6 +42,8 @@ message RunRequest {
   RunscConfig runsc = 8;
 
   WorkloadSpec spec = 7;
+
+  EgressTunnelConfig egress_tunnel = 9;
 }
 
 message GCPAuthenticationConfig {
@@ -67,6 +69,18 @@ message RunscConfig {
 
   // How should atelet authenticate to fetch the runsc binary?
   AuthenticationConfig authentication = 3;
+}
+
+message EgressTunnelConfig {
+  // transparent enables actor TCP egress capture in ateom.
+  bool transparent = 1;
+
+  // gateway_address is the policy enforcement point tunnel endpoint.
+  string gateway_address = 2;
+
+  // local_redirect_port is the localhost listener port inside the worker pod
+  // network namespace that actor TCP traffic is redirected to.
+  uint32 local_redirect_port = 3;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -131,6 +145,8 @@ message RestoreRequest {
 
   // The object storage URI prefix of the snapshot to restore.
   string snapshot_uri_prefix = 8;
+
+  EgressTunnelConfig egress_tunnel = 9;
 }
 
 message RestoreResponse {

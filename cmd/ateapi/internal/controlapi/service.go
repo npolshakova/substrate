@@ -28,6 +28,13 @@ type Service struct {
 	dialer              *AteletDialer
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	actorWorkflow       *ActorWorkflow
+	EgressTunnel        EgressTunnelConfig
+}
+
+type EgressTunnelConfig struct {
+	GatewayAddress       string
+	LocalRedirectPort    uint32
+	TargetActorTemplates map[string]struct{}
 }
 
 var _ ateapipb.ControlServer = (*Service)(nil)

@@ -119,6 +119,7 @@ type ActorWorkflow struct {
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	kubeClient          kubernetes.Interface
 	secretCache         *envSecretCache
+	egress              EgressTunnelConfig
 }
 
 // NewActorWorkflow creates a new ActorWorkflow.
@@ -151,7 +152,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&AssignWorkerStep{store: w.store},
-		&CallAteletRestoreStep{dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache},
+		&CallAteletRestoreStep{dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, egress: w.egress},
 		&FinalizeRunningStep{store: w.store},
 	}
 
